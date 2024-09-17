@@ -2,6 +2,23 @@ version: '3.8'
 
 
 services:
+  minio:
+    image: minio/minio:RELEASE.2023-07-21T21-12-44Z
+    container_name: minio
+    hostname: minio
+    ports:
+      - 9001:9001
+      - 9000:9000
+    environment:
+      - MINIO_ROOT_USER=admin
+      - MINIO_ROOT_PASSWORD=password
+      - AWS_ACCESS_KEY_ID=admin
+      - AWS_SECRET_ACCESS_KEY=password
+      - AWS_REGION=us-east-1
+    command: ["server", "/data", "--console-address", ":9001"]
+    networks:
+      - networklab
+      
   zookeeper:
     image: confluentinc/cp-zookeeper:7.4.0
     hostname: zookeeper
