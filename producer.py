@@ -1,6 +1,4 @@
-# Install necessary packages
-# pip install openmeteo-requests requests-cache retry-requests confluent-kafka jsonschema pandas
-
+import time
 import openmeteo_requests
 import requests_cache
 import pandas as pd
@@ -8,6 +6,7 @@ from retry_requests import retry
 from confluent_kafka import Producer
 import json
 from jsonschema import validate, ValidationError
+from datetime import datetime, timedelta
 
 # Setup the Open-Meteo API client with cache and retry on error
 cache_session = requests_cache.CachedSession('.cache', expire_after=-1)
@@ -61,69 +60,58 @@ def publish_to_kafka(data, topic, producer, schema):
     except Exception as e:
         print(f"Error producing message to Kafka: {e}")
 
-# Fetch data from Open-Meteo API
-url = "https://archive-api.open-meteo.com/v1/archive"
-params = {
-    "latitude": 52.52,
-    "longitude": 13.41,
-    "start_date": "2020-12-25",
-    "end_date": "2024-01-01",
-    "hourly": ["temperature_2m", "relative_humidity_2m", "rain", "snowfall", "weather_code", "surface_pressure", "cloud_cover", "cloud_cover_low", "cloud_cover_high", "wind_direction_10m", "wind_direction_100m", "soil_temperature_28_to_100cm"],
-    "daily": ["temperature_2m_max", "temperature_2m_min"],
-    "timezone": "America/New_York"
-}
-responses = openmeteo.weather_api(url, params=params)
+# Function to fetch and process data for a specific day
+def fetch_and_process_data(date):
+    url = "https://archive-api.open-meteo.com/v1/archive"
+    params = {
+        "latitude": 52.52,
+        "longitude": 13.41,
+        "start_date": date,
+        "end_date": date,
+        "hourly": ["temperature_2m", "relative_humidity_2m", "rain", "snowfall", "weather_code", "surface_pressure", "cloud_cover", "cloud_cover_low", "cloud_cover_high", "wind_direction_10m", "wind_direction_100m", "soil_temperature_28_to_100cm"],
+        "daily": ["temperature_2m_max", "temperature_2m_min"],
+        "timezone": "America/New_York"
+    }
+    responses = openmeteo.weather_api(url, params=params)
 
-# Process first location. Add a for-loop for multiple locations or weather models
-response = responses[0]
+    # Process the response
+    response = responses[0]
+    hourly = response.Hourly()
+    hourly_data = {
+        "date": pd.date_range(
+            start=pd.to_datetime(hourly.Time(), unit="s", utc=True),
+            end=pd.to_datetime(hourly.TimeEnd(), unit="s", utc=True),
+            freq=pd.Timedelta(seconds=hourly.Interval()),
+            inclusive="left"
+        ).strftime('%Y-%m-%d %H:%M:%S').tolist(),
+        "temperature_2m": hourly.Variables(0).ValuesAsNumpy().tolist(),
+        "relative_humidity_2m": hourly.Variables(1).ValuesAsNumpy().tolist(),
+        "rain": hourly.Variables(2).ValuesAsNumpy().tolist(),
+        "snowfall": hourly.Variables(3).ValuesAsNumpy().tolist(),
+        "weather_code": hourly.Variables(4).ValuesAsNumpy().tolist(),
+        "surface_pressure": hourly.Variables(5).ValuesAsNumpy().tolist(),
+        "cloud_cover": hourly.Variables(6).ValuesAsNumpy().tolist(),
+        "cloud_cover_low": hourly.Variables(7).ValuesAsNumpy().tolist(),
+        "cloud_cover_high": hourly.Variables(8).ValuesAsNumpy().tolist(),
+        "wind_direction_10m": hourly.Variables(9).ValuesAsNumpy().tolist(),
+        "wind_direction_100m": hourly.Variables(10).ValuesAsNumpy().tolist(),
+        "soil_temperature_28_to_100cm": hourly.Variables(11).ValuesAsNumpy().tolist()
+    }
 
-# Process hourly data
-hourly = response.Hourly()
-hourly_data = {
-    "date": pd.date_range(
-        start=pd.to_datetime(hourly.Time(), unit="s", utc=True),
-        end=pd.to_datetime(hourly.TimeEnd(), unit="s", utc=True),
-        freq=pd.Timedelta(seconds=hourly.Interval()),
-        inclusive="left"
-    ).strftime('%Y-%m-%d %H:%M:%S').tolist(),
-    "temperature_2m": hourly.Variables(0).ValuesAsNumpy().tolist(),
-    "relative_humidity_2m": hourly.Variables(1).ValuesAsNumpy().tolist(),
-    "rain": hourly.Variables(2).ValuesAsNumpy().tolist(),
-    "snowfall": hourly.Variables(3).ValuesAsNumpy().tolist(),
-    "weather_code": hourly.Variables(4).ValuesAsNumpy().tolist(),
-    "surface_pressure": hourly.Variables(5).ValuesAsNumpy().tolist(),
-    "cloud_cover": hourly.Variables(6).ValuesAsNumpy().tolist(),
-    "cloud_cover_low": hourly.Variables(7).ValuesAsNumpy().tolist(),
-    "cloud_cover_high": hourly.Variables(8).ValuesAsNumpy().tolist(),
-    "wind_direction_10m": hourly.Variables(9).ValuesAsNumpy().tolist(),
-    "wind_direction_100m": hourly.Variables(10).ValuesAsNumpy().tolist(),
-    "soil_temperature_28_to_100cm": hourly.Variables(11).ValuesAsNumpy().tolist()
-}
+    # Convert hourly data to a DataFrame
+    hourly_dataframe = pd.DataFrame(data=hourly_data)
+    print(hourly_dataframe)
 
-# Convert hourly data to a DataFrame
-hourly_dataframe = pd.DataFrame(data=hourly_data)
-print(hourly_dataframe)
+    # Publish hourly data to Kafka with a 0.5 second delay between each row
+    for index, row in hourly_dataframe.iterrows():
+        publish_to_kafka(row.to_dict(), weather_topic, producer, weather_schema)
+        time.sleep(0.5)  # Delay between messages
 
-# Publish hourly data to Kafka
-for index, row in hourly_dataframe.iterrows():
-    publish_to_kafka(row.to_dict(), weather_topic, producer, weather_schema)
+# Main execution loop to process data day by day
+start_date = datetime.strptime("2020-01-01", "%Y-%m-%d")
+end_date = datetime.strptime("2024-01-01", "%Y-%m-%d")
+current_date = start_date
 
-# Process daily data (if necessary)
-# daily = response.Daily()
-# daily_data = {
-#     "date": pd.date_range(
-#         start=pd.to_datetime(daily.Time(), unit="s", utc=True),
-#         end=pd.to_datetime(daily.TimeEnd(), unit="s", utc=True),
-#         freq=pd.Timedelta(seconds=daily.Interval()),
-#         inclusive="left"
-#     ).strftime('%Y-%m-%d').tolist(),
-#     "temperature_2m_max": daily.Variables(0).ValuesAsNumpy().tolist(),
-#     "temperature_2m_min": daily.Variables(1).ValuesAsNumpy().tolist()
-# }
-# daily_dataframe = pd.DataFrame(data=daily_data)
-# print(daily_dataframe)
-
-# Publish daily data to Kafka
-# for index, row in daily_dataframe.iterrows():
-#     publish_to_kafka(row.to_dict(), weather_topic, producer, weather_schema)
-
+while current_date <= end_date:
+    fetch_and_process_data(current_date.strftime("%Y-%m-%d"))
+    current_date += timedelta(days=1)
