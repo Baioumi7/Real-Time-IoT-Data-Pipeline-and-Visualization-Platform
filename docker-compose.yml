@@ -1,8 +1,5 @@
 version: '3.8'
 
-volumes:
-  pinotController1:
-  pinotServer1:
 
 services:
   zookeeper:
@@ -54,8 +51,8 @@ services:
       - networklab
 
   spark-master:
-    hostname: spark-master #added hostname attribute
-    container_name: spark-master #added container name attribute
+    hostname: spark-master
+    container_name: spark-master
     image: docker.io/bitnami/spark:latest
     environment:
       - SPARK_MODE=master
@@ -72,24 +69,70 @@ services:
       - networklab
     volumes:
       - ./draft/mounted-spark-test.py:/draft/mounted-spark-test.py
-      - ./consumer2.py:/consumers/consumer2.py
+      - ./consumer.py:/opt/bitnami/spark/consumer.py
 
   spark-worker:
     image: docker.io/bitnami/spark:latest
     environment:
       - SPARK_MODE=worker
       - SPARK_MASTER_URL=spark://spark-master:7077
-      - SPARK_WORKER_MEMORY=1G
-      - SPARK_WORKER_CORES=1
+      - SPARK_WORKER_MEMORY=2G
+      - SPARK_WORKER_CORES=2
       - SPARK_RPC_AUTHENTICATION_ENABLED=no
       - SPARK_RPC_ENCRYPTION_ENABLED=no
       - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
       - SPARK_SSL_ENABLED=no
       - SPARK_USER=spark
+      - KAFKA_BOOTSTRAP_SERVERS=broker:29092
+      - ELASTICSEARCH_HOST=http://es:9200
     networks:
       - networklab
     depends_on:
-      - spark-master  # Ensure worker waits for the master
+      - spark-master
+
+  es:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.0
+    container_name: es
+    environment:
+      - node.name=es
+      - cluster.name=es-docker-single
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
+      - xpack.security.enabled=false
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+    ports:
+      - 9200:9200
+    networks:
+      - networklab
+      - elastic
+
+  kib:
+    image: docker.elastic.co/kibana/kibana:8.15.0
+    depends_on:
+      - es
+    container_name: kib
+    ports:
+      - 5601:5601
+    environment:
+      ELASTICSEARCH_URL: http://es:9200
+      ELASTICSEARCH_HOSTS: http://es:9200
+      xpack.security.enabled: "false"
+    networks:
+      - networklab
+      - elastic
+
 networks:
   networklab:
     driver: bridge
+  elastic:
+    driver: bridge
+
+volumes:
+  esdata:
+    driver: local
