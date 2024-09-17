@@ -1,52 +1,105 @@
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import from_json, col
-from pyspark.sql.types import StructType, StructField, StringType, DoubleType, LongType
-
-# Define schema based on the Kafka message structure
-schema = StructType([
-    StructField("date", StringType(), True),
-    StructField("temperature_2m", DoubleType(), True),
-    StructField("relative_humidity_2m", DoubleType(), True),
-    StructField("rain", DoubleType(), True),
-    StructField("snowfall", DoubleType(), True),
-    StructField("weather_code", LongType(), True),
-    StructField("surface_pressure", DoubleType(), True),
-    StructField("cloud_cover", DoubleType(), True),
-    StructField("cloud_cover_low", DoubleType(), True),
-    StructField("cloud_cover_high", DoubleType(), True),
-    StructField("wind_direction_10m", DoubleType(), True),
-    StructField("wind_direction_100m", DoubleType(), True),
-    StructField("soil_temperature_28_to_100cm", DoubleType(), True)
-])
-
-# Initialize Spark Session
-spark = SparkSession.builder \
-    .appName("KafkaWeatherConsumer") \
-    .master("spark://spark-master:7079") \
-    .config("spark.jars", "/opt/bitnami/spark/lib/spark/jars/spark-sql-kafka-0-10_2.12-3.5.2.jar") \
-    .config("spark.network.timeout", "600s") \
-    .config("spark.executor.heartbeatInterval", "100s") \
+from pyspark.sql import SparkSession, functions as F
+from pyspark.sql.types import *
+from elasticsearch import Elasticsearch
+########spark with es############
+# Initialize Spark session with required configurations for Kafka and Elasticsearch
+spark = SparkSession.builder.appName("Read From Kafka") \
+    .config("spark.jars.packages", "org.elasticsearch:elasticsearch-spark-30_2.12:7.12.1,org.apache.spark:spark-sql-kafka-0-10_2.12:3.1.1") \
     .getOrCreate()
 
-# Read from Kafka
-weather_df = spark.readStream \
+# Set up Elasticsearch connection
+es = Elasticsearch(hosts=["localhost:9200"])
+
+# Define index settings and mapping for Elasticsearch (updated to match producer schema)
+weather_index = {
+    # "settings": {
+    #     "index": {
+    #         "analysis": {
+    #             "analyzer": {
+    #                 "custom_analyzer": {
+    #                     "type": "custom",
+    #                     "tokenizer": "standard"
+    #                 }
+    #             }
+    #         }
+    #     }
+    # },
+    "mappings": {
+        "properties": {
+            "date": {"type": "date"},
+            "temperature_2m": {"type": "float"},
+            "relative_humidity_2m": {"type": "float"},
+            "rain": {"type": "float"},
+            "snowfall": {"type": "float"},
+            "weather_code": {"type": "integer"},
+            "surface_pressure": {"type": "float"},
+            "cloud_cover": {"type": "float"},
+            "cloud_cover_low": {"type": "float"},
+            "cloud_cover_high": {"type": "float"},
+            "wind_direction_10m": {"type": "float"},
+            "wind_direction_100m": {"type": "float"},
+            "soil_temperature_28_to_100cm": {"type": "float"}
+        }
+    }
+}
+
+# Create the Elasticsearch index with the mapping
+if not es.indices.exists(index="weather-index"):
+    es.indices.create(index="weather-index", body=weather_index)
+
+# Read the stream from Kafka topic
+df = spark \
+    .readStream \
     .format("kafka") \
-    .option("kafka.bootstrap.servers", "broker:9092") \
+    .option("kafka.bootstrap.servers", "localhost:9092") \
     .option("subscribe", "WEATHER") \
-    .option("startingOffsets", "latest") \
+    .option("failOnDataLoss", "false") \
     .load()
 
-# Parse the Kafka messages as JSON
-weather_df_parsed = weather_df.selectExpr("CAST(value AS STRING) as json") \
-    .select(from_json(col("json"), schema).alias("data")) \
-    .select("data.*")
+# Select and process the necessary columns
+df2 = df.selectExpr("CAST(key AS STRING)", "CAST(value AS STRING)", "topic", "partition", "offset", "timestamp")
 
-# Processing logic (here we simply print the data)
-query = weather_df_parsed \
-    .writeStream \
+# Define schema for the incoming data
+schema = StructType([
+    StructField("date", StringType(), True),
+    StructField("temperature_2m", FloatType(), True),
+    StructField("relative_humidity_2m", FloatType(), True),
+    StructField("rain", FloatType(), True),
+    StructField("snowfall", FloatType(), True),
+    StructField("weather_code", IntegerType(), True),
+    StructField("surface_pressure", FloatType(), True),
+    StructField("cloud_cover", FloatType(), True),
+    StructField("cloud_cover_low", FloatType(), True),
+    StructField("cloud_cover_high", FloatType(), True),
+    StructField("wind_direction_10m", FloatType(), True),
+    StructField("wind_direction_100m", FloatType(), True),
+    StructField("soil_temperature_28_to_100cm", FloatType(), True)
+])
+
+# Parse JSON strings into columns based on the schema
+df3 = df2.withColumn("jsonData", F.from_json(F.col("value"), schema)) \
+    .select("jsonData.*")
+
+# Convert date column from string to timestamp
+df3 = df3.withColumn("date", F.to_timestamp(F.col("date"), "yyyy-MM-dd'T'HH:mm:ss"))
+
+# Write the data to Elasticsearch
+def writeToElasticsearch(df, epoch_id):
+    df.write \
+        .format("org.elasticsearch.spark.sql") \
+        .option("es.nodes", "localhost") \
+        .option("es.port", "9200") \
+        .option("es.resource", "weather-index") \
+        .mode("append") \
+        .save()
+
+# Stream and write to Elasticsearch
+streamingQuery = df3.writeStream \
+    .trigger(processingTime="1 second") \
+    .option("numRows", 4) \
+    .option("truncate", False) \
     .outputMode("append") \
-    .format("console") \
-    .trigger(processingTime="10 seconds") \
+    .foreachBatch(writeToElasticsearch) \
     .start()
 
-query.awaitTermination()
+streamingQuery.awaitTermination()
