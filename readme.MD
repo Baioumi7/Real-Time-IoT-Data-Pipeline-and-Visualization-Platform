@@ -48,19 +48,25 @@ Ensure you have the following installed on your system:
 - ElasticSearch and Kibana
 - Power BI Desktop (for data visualization)
 
+### Required Files
+The PostgreSQL database and SSIS project files are provided in the following Google Drive folder:
+- [Download PostgreSQL DB and SSIS Files](https://drive.google.com/drive/folders/1of0CdTXQxhd49zA6ZHruG3HILal-b6j0)
+
 ### Steps
 1. Clone the repository to your local machine:
     ```bash
     git clone https://github.com/yourusername/real-time-iot-weather-data.git
     cd real-time-iot-weather-data
     ```
-2. Start the services using Docker Compose:
+2. Download the PostgreSQL and SSIS files from the [Google Drive](https://drive.google.com/drive/folders/1of0CdTXQxhd49zA6ZHruG3HILal-b6j0) and set them up on your environment.
+
+3. Start the services using Docker Compose:
     ```bash
     docker-compose up
     ```
-3. Configure the data sources for your weather API, PostgreSQL, and MinIO as required.
+4. Configure the data sources for your weather API, PostgreSQL, and MinIO as required.
 
-4. Connect Power BI to the SQL Server Data Warehouse for real-time visualization.
+5. Connect Power BI to the SQL Server Data Warehouse for real-time visualization.
 
 ## How it Works
 1. **Data Ingestion**: Weather data from the API or IoT devices is pushed into Kafka.
