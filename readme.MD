@@ -1,5 +1,5 @@
 # Real-Time IoT Weather Data
-![ON-PREM Architecture](./Screenshot 2024-10-27 184614.png)
+![ON-PREM Architecture](./Screenshot%2024-10-27%184614.png)
 This project demonstrates the architecture for real-time IoT weather data collection, processing, storage, and visualization using various open-source tools and technologies. The data pipeline handles incoming weather data through Kafka, processes it using Spark, and visualizes the insights using Power BI and Kibana.
 
 ## Table of Contents
